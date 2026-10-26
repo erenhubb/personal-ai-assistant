@@ -18,6 +18,21 @@ RATE = "+15%"  # Konuşma hızı: "+0%" normal, "+30%" daha hızlı
 VOLUME = "+0%"  # Ses yüksekliği: "+0%" normal, "-40%" daha kısık
 SAMPLE_RATE = 24000
 
+# Aynı anda iki ses çalmasın (ör. hatırlatma ile cevap çakışmasın)
+AUDIO_LOCK = threading.Lock()
+# Jarvis konuşurken açık olur; kulak bu sırada duyduğunu Eren'in sesi sanmasın
+SPEAKING = threading.Event()
+
+
+def play(audio):
+    with AUDIO_LOCK:
+        SPEAKING.set()
+        try:
+            sd.play(audio, SAMPLE_RATE)
+            sd.wait()
+        finally:
+            SPEAKING.clear()
+
 
 def clean_for_speech(text):
     """Emoji ve yıldız gibi okunmaması gereken işaretleri temizler."""
@@ -57,8 +72,7 @@ def speak(text):
         return
     audio = text_to_audio(text)
     if audio is not None:
-        sd.play(audio, SAMPLE_RATE)
-        sd.wait()
+        play(audio)
 
 
 class SentenceSpeaker:
@@ -117,6 +131,5 @@ class SentenceSpeaker:
 
     def _play(self):
         while (audio := self._audios.get()) is not None and not self.stopped:
-            sd.play(audio, SAMPLE_RATE)
-            sd.wait()
+            play(audio)
         self._done.set()

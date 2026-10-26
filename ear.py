@@ -11,6 +11,8 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
+import voice
+
 SAMPLE_RATE = 16000
 FRAME = 1280  # 80 milisaniyelik ses parçası
 FRAME_SECONDS = FRAME / SAMPLE_RATE
@@ -111,6 +113,9 @@ def record_utterance(timeout=None):
         while timeout is None or waited < timeout:
             frame, level = read_frame(stream)
             waited += FRAME_SECONDS
+            if voice.SPEAKING.is_set():
+                pre_roll.clear()  # Jarvis kendi sesini (ör. hatırlatma) Eren sanmasın
+                continue
             if len(noise) >= 4 and level > speech_threshold():
                 return record_rest(stream, [*pre_roll, frame])
             noise.append(level)

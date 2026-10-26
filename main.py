@@ -11,6 +11,8 @@ import anthropic
 from dotenv import load_dotenv
 
 import hands
+import info
+import reminders
 import ui_server
 import voice
 
@@ -36,7 +38,15 @@ SYSTEM_PROMPT = (
     "Bu yüzden asla 'hatırlayamam' ya da 'kalıcı hafızam yok' deme; Eren'in anlattığı ders "
     "programı, tarihler, tercihler gibi her şeyi hatırla ve sorulunca kullan. "
     "Eren'in her mesajının sonuna sistem o anın tarihini ve saatini parantez içinde ekler; "
-    "bunu bilgi olarak kullan ama cevabına kendin tarih ya da saat parantezi ekleme."
+    "bunu bilgi olarak kullan ama cevabına kendin tarih ya da saat parantezi ekleme. "
+    "Hatırlatma istenirse add_reminder ile kur; ders gibi her hafta tekrar edenler için weekly kullan. "
+    "Hava durumu ya da haber sorulursa get_weather ve get_news araçlarını kullan; "
+    "Eren'in şehrini bilmiyorsan bir kere sor, sonra hatırla. "
+    "Sabah özeti: Eren 'günaydın' derse ya da günün özetini isterse kısaca bugünün tarihini, "
+    "şehrinin hava durumunu, hafızandaki ders programından bugünkü derslerini, list_reminders ile "
+    "bugünkü hatırlatmalarını ve get_news'ten en önemli iki üç başlığı anlat. "
+    "Oyun modu: Eren oyun modunu isterse istediği oyunu open_app ile aç, iyi oyunlar de ve "
+    "go_to_sleep ile uyu; hangi oyunu istediğini söylemediyse sor."
 )
 DAYS = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 MONTHS = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos",
@@ -66,7 +76,13 @@ SLEEP_TOOL = {
     "eager_input_streaming": True,
 }
 # Jarvis'in kullanabileceği bütün araçlar; konuşma boyunca değişmez
-ALL_TOOLS = hands.TOOLS + ([SLEEP_TOOL] if VOICE_MODE else [])
+ALL_TOOLS = hands.TOOLS + reminders.TOOLS + info.TOOLS + ([SLEEP_TOOL] if VOICE_MODE else [])
+# Hangi araç hangi modülde çalışır
+TOOL_RUNNERS = {
+    **{t["name"]: hands.run_tool for t in hands.TOOLS},
+    **{t["name"]: reminders.run_tool for t in reminders.TOOLS},
+    **{t["name"]: info.run_tool for t in info.TOOLS},
+}
 
 
 def load_history():
@@ -149,8 +165,10 @@ def ask_claude(client, history, user_input):
                 if block.name == SLEEP_TOOL["name"]:
                     ok, result = True, "Uyku moduna geçiliyor."
                     wants_sleep = True
+                elif block.name in TOOL_RUNNERS:
+                    ok, result = TOOL_RUNNERS[block.name](block.name, block.input)
                 else:
-                    ok, result = hands.run_tool(block.name, block.input)
+                    ok, result = False, f"Bilinmeyen araç: {block.name}"
                 print(f"\n  [{block.name}] {result}", flush=True)
                 ui_server.send(state="thinking", action=result)
                 actions.append(result)
@@ -201,6 +219,7 @@ def is_sleep_command(command):
 
 
 def run_text_mode(client, history):
+    reminders.start_watcher(announce_reminder)
     print(f"Jarvis hazır ({len(history) // 2} eski mesaj hatırlanıyor). Çıkmak için 'q' yaz.\n")
     while True:
         user_input = input("Sen: ").strip()
@@ -217,6 +236,7 @@ def run_voice_mode(client, history):
         print("Jarvis zaten açık, ikinci kez başlatılmadı.")
         voice.speak("Ben zaten açığım Eren.")
         return
+    reminders.start_watcher(announce_reminder)
     print("Kulaklarım hazırlanıyor, birkaç saniye sürebilir...")
     device = ear.load_models()
     print(f"Jarvis hazır, kulaklar {device} üzerinde ({len(history) // 2} eski mesaj hatırlanıyor).")
@@ -269,6 +289,16 @@ def run_voice_mode(client, history):
         interrupted_audio, wants_sleep = ask_claude(client, history, text)
         if wants_sleep:
             awake = False
+
+
+def announce_reminder(reminder):
+    """Zamanı gelen hatırlatmayı ekrana yazar ve sesli söyler."""
+    intro = "kaçırdığın bir hatırlatma var" if reminder["late"] else "hatırlatma"
+    text = f"Eren, {intro}: {reminder['text']}"
+    print(f"\n[Hatırlatma] {reminder['when']} - {reminder['text']}", flush=True)
+    ui_server.send(state="speaking", you="", reply=text, action=f"HATIRLATMA · {reminder['when']}")
+    if VOICE_MODE:
+        voice.speak(text)
 
 
 def main():
