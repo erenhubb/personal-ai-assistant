@@ -29,6 +29,13 @@ def send(**message):
             client.put(message)
 
 
+class Server(ThreadingHTTPServer):
+    # Windows'ta adres paylaşımı açıkken ikinci bir Jarvis aynı adresi alabiliyor;
+    # kapatıyoruz ki "Jarvis zaten açık" kontrolü çalışsın.
+    allow_reuse_address = False
+    daemon_threads = True
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -77,10 +84,9 @@ def start(open_window=True):
     """Arayüz sunucusunu arka planda başlatır ve pencereyi açar.
     Başka bir Jarvis zaten açıksa (adres dolu) False döndürür."""
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+        server = Server(("127.0.0.1", PORT), Handler)
     except OSError:
         return False
-    server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     if open_window:
         subprocess.Popen(f'start "" msedge --app={URL} --window-size=900,820', shell=True)
@@ -90,4 +96,4 @@ def start(open_window=True):
 if __name__ == "__main__":
     # Sadece arayüzü denemek için: python ui_server.py, sonra tarayıcıda /?demo=1 aç
     print(f"Arayüz: {URL}?demo=1")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    Server(("127.0.0.1", PORT), Handler).serve_forever()

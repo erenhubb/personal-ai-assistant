@@ -224,6 +224,7 @@ def run_voice_mode(client, history):
     ear.on_level = lambda level: awake and ui_server.send(level=level / MIC_LEVEL_FULL)
 
     awake = False
+    sleep_announced = False  # "Uyuyorum" yazısı her seferinde tekrar yazılmasın
     interrupted_audio = None  # Jarvis'in sözünü kestiysen söylediğin
     while True:
         ui_server.send(state="listening" if awake else "sleeping", level=0)
@@ -231,8 +232,9 @@ def run_voice_mode(client, history):
             text = ear.transcribe(interrupted_audio)
             interrupted_audio = None
         else:
-            if not awake:
+            if not awake and not sleep_announced:
                 print("\n(Uyuyorum. Uyandırmak için 'Jarvis' de.)")
+            sleep_announced = not awake
             text = ear.listen(timeout=AUTO_SLEEP_SECONDS if awake else None)
             if text is None:
                 print("(Bir süredir kimse konuşmadı, uyuyorum.)")
