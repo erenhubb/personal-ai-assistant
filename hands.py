@@ -29,7 +29,7 @@ TOOLS = [
     {
         "name": "open_app",
         "description": "Bilgisayarda yüklü bir uygulamayı açar (Spotify, Chrome, Hesap Makinesi gibi). "
-                       "Uygulamanın adını Yusuf'un söylediği gibi ver.",
+                       "Uygulamanın adını Eren'in söylediği gibi ver.",
         "input_schema": {
             "type": "object",
             "properties": {"name": {"type": "string", "description": "Uygulamanın adı"}},

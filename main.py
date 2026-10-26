@@ -4,12 +4,14 @@ import json
 import re
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
 
 import hands
+import ui_server
 import voice
 
 # "python main.py --yazi" ile açarsan klavyeden yazarak konuşursun
@@ -23,17 +25,26 @@ load_dotenv()
 # Haiku hızlı ve ucuz; daha akıllı ama yavaş cevaplar için "claude-opus-5-5"
 MODEL = "claude-haiku-5-5"
 SYSTEM_PROMPT = (
-    "Senin adın Jarvis. Yusuf'un kişisel asistanısın. "
+    "Senin adın Jarvis. Eren'in kişisel asistanısın. "
     "Türkçe, samimi ve kısa cevaplar ver. "
     "Cevapların sesli okunacak; emoji, madde işareti ve başlık kullanma, "
     "düz konuşma cümleleriyle yaz. "
     "Bilgisayarda uygulama, klasör, dosya ya da web sitesi açman istenirse araçlarını kullan "
     "ve ne yaptığını tek kısa cümleyle söyle. Bir şeyi açamadıysan nedenini söyle. "
-    "Önceki konuşmalarınızın tamamı aşağıda; Yusuf'un anlattıklarını hatırla."
+    "Kalıcı bir hafızan var: Eren'le yaptığın bütün konuşmalar bilgisayarında bir dosyaya "
+    "kaydediliyor ve her açılışta sana geri veriliyor; aşağıdaki geçmiş o hafıza. "
+    "Bu yüzden asla 'hatırlayamam' ya da 'kalıcı hafızam yok' deme; Eren'in anlattığı ders "
+    "programı, tarihler, tercihler gibi her şeyi hatırla ve sorulunca kullan. "
+    "Eren'in her mesajının sonuna sistem o anın tarihini ve saatini parantez içinde ekler; "
+    "bunu bilgi olarak kullan ama cevabına kendin tarih ya da saat parantezi ekleme."
 )
+DAYS = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
+MONTHS = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos",
+          "Eylül", "Ekim", "Kasım", "Aralık"]
 MAX_TOOL_ROUNDS = 6  # Bir soruda en fazla bu kadar araç turu
 # Bütün konuşmalar bu dosyada saklanır. Silersen Jarvis her şeyi unutur.
 MEMORY_FILE = Path(__file__).parent / "hafiza.json"
+LOG_FILE = Path(__file__).parent / "jarvis.log"
 
 QUIT_WORDS = ("q", "quit", "exit", "çık")  # Yazılı modda programı kapatır
 # Sesli modda uyutur: "kapan", "kapanabilirsin", "uyu artık", "tamam sus" gibi
@@ -41,12 +52,15 @@ SLEEP_WORD = re.compile(r"(kapan|kapat|uyu|sus|görüşürüz|yeter|hoşça ?kal
 FILLER_WORDS = {"tamam", "artık", "lütfen", "hadi", "sen", "biraz", "şimdi", "peki"}
 SHUTDOWN_WORDS = ("kendini kapat", "tamamen kapan")  # Sesli modda programı kapatır
 AUTO_SLEEP_SECONDS = 40  # Uyanıkken bu kadar kimse konuşmazsa kendiliğinden uyur
+MIC_LEVEL_FULL = 4000  # Bu ses seviyesinde arayüzdeki halkalar en büyük haline gelir
+# Arayüz ayrı pencerede de açılsın mı? Duvar kağıdı olarak kullanıyorsan False yap.
+SHOW_WINDOW = False
 
 # Claude'un Jarvis'i kendisi uyutabilmesi için (ör. "tamam bu kadar, teşekkürler")
 SLEEP_TOOL = {
     "name": "go_to_sleep",
-    "description": "Jarvis'i uyku moduna alır; Yusuf tekrar 'Jarvis' diyene kadar dinlemeyi bırakır. "
-                   "Yusuf konuşmayı bitirdiğinde, kapanmanı, susmanı ya da uyumanı istediğinde kullan.",
+    "description": "Jarvis'i uyku moduna alır; Eren tekrar 'Jarvis' diyene kadar dinlemeyi bırakır. "
+                   "Eren konuşmayı bitirdiğinde, kapanmanı, susmanı ya da uyumanı istediğinde kullan.",
     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     "strict": True,
     "eager_input_streaming": True,
@@ -67,6 +81,12 @@ def save_history(history):
     )
 
 
+def now_text():
+    """Örnek: '26 Ekim 2026 Pazartesi, saat 13:32'"""
+    now = datetime.now()
+    return f"{now.day} {MONTHS[now.month - 1]} {now.year} {DAYS[now.weekday()]}, saat {now:%H:%M}"
+
+
 def stream_reply(client, messages, speaker):
     """Claude'un bir cevabını kelime kelime ekrana yazar ve sesli okur.
     (yazı, tam_cevap) döndürür; araya girildiyse tam_cevap None olur."""
@@ -85,6 +105,7 @@ def stream_reply(client, messages, speaker):
             if speaker.stopped:
                 return text_so_far, None  # Araya girildi, cevabın kalanına gerek yok
             print(text, end="", flush=True)
+            ui_server.send(state="speaking", reply=text)
             speaker.feed(text)
             text_so_far += text
         return text_so_far, stream.get_final_message()
@@ -97,7 +118,8 @@ def ask_claude(client, history, user_input):
     (araya_girilen_ses, uyusun_mu) döndürür: Jarvis konuşurken araya girersen susar ve
     söylediğin sesi verir; Claude Jarvis'i uyutmak isterse uyusun_mu True olur.
     """
-    history.append({"role": "user", "content": user_input})
+    # Tarih ve saati mesajın sonuna ekliyoruz (sistem talimatına değil, önbellek bozulmasın diye)
+    history.append({"role": "user", "content": f"{user_input}\n\n({now_text()})"})
     # Bu turun mesajları; araç kullanımı bitene kadar sadece sona eklenir
     messages = list(history)
     speaker = voice.SentenceSpeaker()
@@ -108,6 +130,7 @@ def ask_claude(client, history, user_input):
     wants_sleep = False
 
     print("Jarvis: ", end="", flush=True)
+    ui_server.send(state="thinking", you=user_input)
     try:
         for _ in range(MAX_TOOL_ROUNDS):
             text, response = stream_reply(client, messages, speaker)
@@ -129,6 +152,7 @@ def ask_claude(client, history, user_input):
                 else:
                     ok, result = hands.run_tool(block.name, block.input)
                 print(f"\n  [{block.name}] {result}", flush=True)
+                ui_server.send(state="thinking", action=result)
                 actions.append(result)
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": result, "is_error": not ok})
@@ -188,13 +212,21 @@ def run_text_mode(client, history):
 
 
 def run_voice_mode(client, history):
+    if not ui_server.start(open_window=SHOW_WINDOW):
+        # Aynı anda iki Jarvis mikrofonu kapışmasın
+        print("Jarvis zaten açık, ikinci kez başlatılmadı.")
+        voice.speak("Ben zaten açığım Eren.")
+        return
     print("Kulaklarım hazırlanıyor, birkaç saniye sürebilir...")
     device = ear.load_models()
     print(f"Jarvis hazır, kulaklar {device} üzerinde ({len(history) // 2} eski mesaj hatırlanıyor).")
+    # Konuşurken arayüzdeki halkalar sesine göre titreşsin (sadece uyanıkken)
+    ear.on_level = lambda level: awake and ui_server.send(level=level / MIC_LEVEL_FULL)
 
     awake = False
     interrupted_audio = None  # Jarvis'in sözünü kestiysen söylediğin
     while True:
+        ui_server.send(state="listening" if awake else "sleeping", level=0)
         if interrupted_audio is not None:
             text = ear.transcribe(interrupted_audio)
             interrupted_audio = None
@@ -214,6 +246,7 @@ def run_voice_mode(client, history):
             if not woke:
                 continue
             awake = True
+            ui_server.send(state="listening", you="", reply="")
             ear.beep()
             print("(Uyandım. Uyutmak için 'kapan' de.)\n")
             # "Jarvis, hava nasıl?" dendiyse soruyu hemen cevapla
@@ -223,9 +256,11 @@ def run_voice_mode(client, history):
         print(f"Sen: {text}")
         command = as_command(text)
         if any(words in command for words in SHUTDOWN_WORDS):
-            voice.speak("Kendimi kapatıyorum, görüşürüz Yusuf.")
+            ui_server.send(state="speaking", you=text, reply="Kendimi kapatıyorum, görüşürüz Eren.")
+            voice.speak("Kendimi kapatıyorum, görüşürüz Eren.")
             break
         if is_sleep_command(command):
+            ui_server.send(state="speaking", you=text, reply="Tamam, uyuyorum.")
             voice.speak("Tamam, uyuyorum.")
             awake = False
             continue
@@ -246,7 +281,15 @@ def main():
 
 
 if __name__ == "__main__":
+    # Gizli çalışırken (pythonw) ekran yok; yazılanlar ve hatalar jarvis.log dosyasına gider
+    if sys.stdout is None:
+        log = open(LOG_FILE, "w", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = log
     try:
         main()
     except KeyboardInterrupt:
         print("\nGörüşürüz!")
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise

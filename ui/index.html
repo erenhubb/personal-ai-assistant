@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --ink: #d8f6ff;
+    --muted: #6f8796;
+    --cyan: 0, 210, 255;
+    --amber: 255, 176, 46;
+    --dim: 70, 110, 140;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    overflow: hidden; user-select: none;
+  }
+  body {
+    display: grid; grid-template-rows: auto 1fr auto; min-height: 100%;
+    background:
+      radial-gradient(ellipse at 50% 42%, rgba(0, 120, 170, 0.16), transparent 60%),
+      var(--bg);
+  }
+  header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 24px 0; font-size: 12px; letter-spacing: 0.32em; color: var(--muted);
+  }
+  header b { color: var(--ink); font-weight: 600; letter-spacing: 0.5em; }
+  #clock { font-variant-numeric: tabular-nums; letter-spacing: 0.15em; }
+  main { position: relative; display: grid; place-items: center; min-height: 0; }
+  canvas { width: min(78vmin, 560px); height: min(78vmin, 560px); }
+  #status {
+    position: absolute; bottom: 4%; left: 0; right: 0; text-align: center;
+    font-size: 13px; letter-spacing: 0.4em; color: var(--muted); text-transform: uppercase;
+    transition: color 0.4s;
+  }
+  footer { padding: 0 32px 28px; display: grid; gap: 10px; justify-items: center; }
+  .line {
+    max-width: 760px; width: 100%; text-align: center; line-height: 1.5;
+    min-height: 1.5em; transition: opacity 0.4s;
+  }
+  #you { color: var(--muted); font-size: 15px; }
+  #you::before { content: "Sen  ·  "; color: rgba(var(--cyan), 0.6); font-size: 12px; letter-spacing: 0.2em; }
+  #you:empty::before { content: ""; }
+  #reply { font-size: 19px; font-weight: 300; display: -webkit-box; -webkit-line-clamp: 4;
+           -webkit-box-orient: vertical; overflow: hidden; }
+  #action { font-size: 12px; letter-spacing: 0.15em; color: rgba(var(--amber), 0.9); min-height: 1em; }
+</style>
+</head>
+<body>
+  <header><b>J.A.R.V.I.S</b><span id="clock"></span></header>
+  <main>
+    <canvas id="orb" width="1120" height="1120"></canvas>
+    <div id="status">Uyuyor</div>
+  </main>
+  <footer>
+    <div class="line" id="you"></div>
+    <div class="line" id="reply"></div>
+    <div class="line" id="action"></div>
+  </footer>
+
+<script>
+const canvas = document.getElementById("orb");
+const ctx = canvas.getContext("2d");
+const W = canvas.width, C = W / 2;
+const statusEl = document.getElementById("status");
+const youEl = document.getElementById("you");
+const replyEl = document.getElementById("reply");
+const actionEl = document.getElementById("action");
+
+const STATES = {
+  offline:   { label: "Kapalı",     color: "var(--dim)",   rgb: [55, 75, 95],   energy: 0.08, spin: 0.08 },
+  sleeping:  { label: "Uyuyor",     color: "var(--dim)",   rgb: [70, 110, 140], energy: 0.15, spin: 0.15 },
+  listening: { label: "Dinliyor",   color: "var(--cyan)",  rgb: [0, 210, 255],  energy: 0.7,  spin: 0.6 },
+  thinking:  { label: "Düşünüyor",  color: "var(--amber)", rgb: [255, 176, 46], energy: 0.55, spin: 2.2 },
+  speaking:  { label: "Konuşuyor",  color: "var(--cyan)",  rgb: [0, 210, 255],  energy: 1.0,  spin: 0.8 },
+};
+let state = "sleeping";
+let level = 0;          // Mikrofon/ses seviyesi (0-1), Python gönderir
+let shown = { rgb: [...STATES.sleeping.rgb], energy: 0.15, spin: 0.15, level: 0 };
+
+function setState(name) {
+  if (!STATES[name]) return;
+  state = name;
+  statusEl.textContent = STATES[name].label;
+  statusEl.style.color = `rgba(${STATES[name].rgb.join(",")}, 0.85)`;
+}
+
+const lerp = (a, b, t) => a + (b - a) * t;
+const rgba = (rgb, a) => `rgba(${rgb.map(Math.round).join(",")},${a})`;
+
+function arc(r, start, end, width, color) {
+  ctx.beginPath();
+  ctx.arc(C, C, r, start, end);
+  ctx.lineWidth = width;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+}
+
+function draw(t) {
+  const target = STATES[state];
+  shown.rgb = shown.rgb.map((v, i) => lerp(v, target.rgb[i], 0.06));
+  shown.energy = lerp(shown.energy, target.energy, 0.05);
+  shown.spin = lerp(shown.spin, target.spin, 0.05);
+  shown.level = lerp(shown.level, level, 0.25);
+  const rgb = shown.rgb, e = shown.energy, time = t / 1000;
+  const breath = 0.5 + 0.5 * Math.sin(time * (state === "sleeping" ? 0.9 : 2.2));
+  const pulse = Math.max(shown.level, state === "speaking" ? 0.25 + 0.25 * Math.sin(time * 9) : 0);
+
+  ctx.clearRect(0, 0, W, W);
+  ctx.globalCompositeOperation = "lighter";
+
+  // Dış ışıma
+  const glow = ctx.createRadialGradient(C, C, 60, C, C, 520);
+  glow.addColorStop(0, rgba(rgb, 0.16 + 0.28 * e + 0.3 * pulse));
+  glow.addColorStop(0.45, rgba(rgb, 0.06 + 0.1 * e));
+  glow.addColorStop(1, rgba(rgb, 0));
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, W);
+
+  // Dış ince halka ve ölçek çizgileri
+  arc(470, 0, Math.PI * 2, 1.5, rgba(rgb, 0.25 + 0.2 * e));
+  for (let i = 0; i < 120; i++) {
+    const a = (i / 120) * Math.PI * 2 + time * 0.05 * shown.spin;
+    const long = i % 10 === 0;
+    const r1 = 448, r2 = long ? 426 : 438;
+    ctx.beginPath();
+    ctx.moveTo(C + Math.cos(a) * r1, C + Math.sin(a) * r1);
+    ctx.lineTo(C + Math.cos(a) * r2, C + Math.sin(a) * r2);
+    ctx.lineWidth = long ? 3 : 1.5;
+    ctx.strokeStyle = rgba(rgb, (long ? 0.55 : 0.22) * (0.5 + e * 0.5));
+    ctx.stroke();
+  }
+
+  // Dönen parçalı halkalar
+  const rings = [
+    { r: 395, seg: 3, gap: 0.5, w: 6, speed: 0.35 },
+    { r: 360, seg: 8, gap: 0.25, w: 3, speed: -0.6 },
+    { r: 325, seg: 2, gap: 1.2, w: 12, speed: 0.9 },
+  ];
+  rings.forEach(({ r, seg, gap, w, speed }) => {
+    const rot = time * speed * shown.spin;
+    for (let i = 0; i < seg; i++) {
+      const s = rot + (i / seg) * Math.PI * 2;
+      arc(r, s, s + (Math.PI * 2) / seg - gap, w, rgba(rgb, 0.5 + 0.5 * e));
+    }
+  });
+
+  // Ses dalgası: halkanın etrafında çubuklar
+  const bars = 96;
+  for (let i = 0; i < bars; i++) {
+    const a = (i / bars) * Math.PI * 2 - Math.PI / 2;
+    const n = Math.sin(i * 0.9 + time * 6) * 0.5 + Math.sin(i * 0.37 - time * 4) * 0.5;
+    const h = 6 + (14 + 70 * pulse) * (0.5 + 0.5 * n) * (0.3 + e);
+    const r1 = 250;
+    ctx.beginPath();
+    ctx.moveTo(C + Math.cos(a) * r1, C + Math.sin(a) * r1);
+    ctx.lineTo(C + Math.cos(a) * (r1 + h), C + Math.sin(a) * (r1 + h));
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = rgba(rgb, 0.4 + 0.6 * e);
+    ctx.stroke();
+  }
+
+  // Çekirdek (ark reaktörü)
+  const coreR = 150 + 16 * breath * e + 40 * pulse;
+  const core = ctx.createRadialGradient(C, C, 0, C, C, coreR);
+  core.addColorStop(0, `rgba(255,255,255,${0.55 + 0.35 * e})`);
+  core.addColorStop(0.25, rgba(rgb, 0.9 * (0.5 + e * 0.5)));
+  core.addColorStop(0.7, rgba(rgb, 0.3 * (0.4 + e)));
+  core.addColorStop(1, rgba(rgb, 0));
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.arc(C, C, coreR, 0, Math.PI * 2);
+  ctx.fill();
+  arc(205, 0, Math.PI * 2, 2, rgba(rgb, 0.5 + 0.4 * e));
+  arc(185, 0, Math.PI * 2, 1, rgba(rgb, 0.3));
+
+  // Düşünürken çekirdeğin etrafında dönen üçgen işaretler
+  if (state === "thinking") {
+    for (let i = 0; i < 3; i++) {
+      const a = time * 3 + (i / 3) * Math.PI * 2;
+      const x = C + Math.cos(a) * 225, y = C + Math.sin(a) * 225;
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
+      ctx.fillStyle = rgba(rgb, 0.95);
+      ctx.fill();
+    }
+  }
+
+  ctx.globalCompositeOperation = "source-over";
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+function tickClock() {
+  const d = new Date();
+  document.getElementById("clock").textContent =
+    d.toLocaleDateString("tr-TR", { weekday: "long" }).toUpperCase() + "  " +
+    d.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" });
+}
+tickClock();
+setInterval(tickClock, 1000);
+
+// Python'dan gelen olaylar
+function handle(msg) {
+  if (msg.state) setState(msg.state);
+  if (msg.level !== undefined) level = Math.min(1, msg.level);
+  if (msg.you !== undefined) { youEl.textContent = msg.you; replyEl.textContent = ""; actionEl.textContent = ""; }
+  if (msg.reply !== undefined) replyEl.textContent += msg.reply;
+  if (msg.action !== undefined) actionEl.textContent = msg.action;
+}
+
+if (location.search.includes("demo")) {
+  const script = [
+    [0, { state: "sleeping" }],
+    [2500, { state: "listening", you: "" }],
+    [4500, { you: "Jarvis, yarın sabah hava nasıl olacak?", state: "thinking" }],
+    [6000, { state: "speaking", reply: "Yarın İstanbul'da hava parçalı bulutlu, " }],
+    [7000, { reply: "sıcaklık 18 derece civarında. " }],
+    [8200, { reply: "Akşama doğru hafif yağmur bekleniyor, şemsiyeni almayı unutma." }],
+    [11000, { state: "listening", level: 0 }],
+    [12500, { you: "YouTube'da Haydar Haydar'ı aç.", state: "thinking" }],
+    [13600, { action: "YOUTUBE'DA 'HAYDAR HAYDAR' AÇILDI", state: "speaking", reply: "Açtım, keyifli dinlemeler." }],
+    [16000, { state: "sleeping" }],
+  ];
+  const loop = () => script.forEach(([at, msg]) => setTimeout(() => handle(msg), at));
+  loop();
+  setInterval(loop, 18000);
+} else {
+  // Duvar kağıdı olarak dosyadan açıldığında da Jarvis'e bağlanabilsin diye tam adres.
+  // Jarvis kapalıysa birkaç saniyede bir tekrar dener.
+  const EVENTS_URL = "http://127.0.0.1:8765/events";
+  const connect = () => {
+    const events = new EventSource(EVENTS_URL);
+    events.onmessage = (e) => handle(JSON.parse(e.data));
+    events.onerror = () => {
+      events.close();
+      handle({ state: "offline", level: 0 });
+      setTimeout(connect, 3000);
+    };
+  };
+  setState("offline");
+  connect();
+}
+</script>
+</body>
+</html>

@@ -72,10 +72,17 @@ def open_mic():
     return sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=FRAME)
 
 
+# Her ses parçasında seviyeyi bildirmek için (arayüzdeki animasyon kullanır)
+on_level = None
+
+
 def read_frame(stream):
     frame, _ = stream.read(FRAME)
     frame = frame[:, 0].copy()
-    return frame, float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+    level = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+    if on_level:
+        on_level(level)
+    return frame, level
 
 
 def speech_threshold():
